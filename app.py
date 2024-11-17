@@ -1,94 +1,107 @@
-import streamlit as st # type: ignore
-from PyPDF2 import PdfReader # type: ignore
-from langchain.text_splitter import RecursiveCharacterTextSplitter # type: ignore
-from langchain_google_genai import GoogleGenerativeAIEmbeddings # type: ignore
-import google.generativeai as genai # type: ignore
-from langchain.vectorstores import FAISS # type: ignore
-from langchain_google_genai import ChatGoogleGenerativeAI # type: ignore
-from langchain.chains.question_answering import load_qa_chain # type: ignore
-from langchain.prompts import PromptTemplate # type: ignore
+import streamlit as st  # type: ignore
+from PyPDF2 import PdfReader  # type: ignore
+from langchain.text_splitter import RecursiveCharacterTextSplitter  # type: ignore
+from langchain_google_genai import GoogleGenerativeAIEmbeddings  # type: ignore
+import google.generativeai as genai  # type: ignore
+from langchain.vectorstores import FAISS  # type: ignore
+from langchain_google_genai import ChatGoogleGenerativeAI  # type: ignore
+from langchain.chains.question_answering import load_qa_chain  # type: ignore
+from langchain.prompts import PromptTemplate  # type: ignore
 
+# Streamlit page configuration
 st.set_page_config(page_title="Document Genie", layout="wide")
 
-st.markdown("""
-## Document Genie: Get instant insights from your Documents
+# Sidebar Instructions
+st.sidebar.markdown("""
+## Document Genie: Instant Insights from Your Documents
 
-This chatbot is built using the Retrieval-Augmented Generation (RAG) framework, leveraging Google's Generative AI model Gemini-PRO. It processes uploaded PDF documents by breaking them down into manageable chunks, creates a searchable vector store, and generates accurate answers to user queries. This advanced approach ensures high-quality, contextually relevant responses for an efficient and effective user experience.
+This chatbot uses Google's Generative AI (Gemini-PRO) to process and analyze uploaded PDFs for quick insights.
 
-### How It Works
-
-Follow these simple steps to interact with the chatbot:
-
-1. **Enter Your API Key**: You'll need a Google API key for the chatbot to access Google's Generative AI models. Obtain your API key https://makersuite.google.com/app/apikey.
-
-2. **Upload Your Documents**: The system accepts multiple PDF files at once, analyzing the content to provide comprehensive insights.
-
-3. **Ask a Question**: After processing the documents, ask any question related to the content of your uploaded documents for a precise answer.
+### How to Use:
+1. Upload your PDF documents.
+2. Submit and ask questions for precise answers based on the content.
 """)
 
-api_key = st.text_input("Enter your Google API key:", type="password", key="api_key_input")
+# API key setup
+api_key = "AIzaSyBT7Gt1CvFuAU2wHAtbUOFuOeHtAeEuQqA"
 
 def get_pdf_text(pdf_docs):
+    """Extract text from uploaded PDF files."""
     text = ""
     for pdf in pdf_docs:
-        pdf_reader = PdfReader(pdf)
-        for page in pdf_reader.pages:
-            text += page.extract_text()
+        try:
+            pdf_reader = PdfReader(pdf)
+            for page in pdf_reader.pages:
+                text += page.extract_text()
+        except Exception as e:
+            st.error(f"Error reading file {pdf.name}: {e}")
     return text
 
 def get_text_chunks(text):
+    """Split text into manageable chunks."""
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=10000, chunk_overlap=1000)
-    chunks = text_splitter.split_text(text)
-    return chunks
+    return text_splitter.split_text(text)
 
 def get_vector_store(text_chunks, api_key):
+    """Create and save a FAISS vector store from text chunks."""
     embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001", google_api_key=api_key)
     vector_store = FAISS.from_texts(text_chunks, embedding=embeddings)
     vector_store.save_local("faiss_index")
 
 def get_conversational_chain():
+    """Create a conversational chain using a custom prompt."""
     prompt_template = """
-    Answer the question as detailed as possible from the provided context, make sure to provide all the details, if the answer is not in
-    provided context just say, "answer is not available in the context", don't provide the wrong answer\n\n
-    Context:\n {context}?\n
-    Question: \n{question}\n
+    Answer the question as accurately as possible based on the provided context. If the answer is not available, respond with:
+    "Answer is not available in the context."
+
+    Context: {context}
+    Question: {question}
 
     Answer:
     """
     model = ChatGoogleGenerativeAI(model="gemini-pro", temperature=0.3, google_api_key=api_key)
     prompt = PromptTemplate(template=prompt_template, input_variables=["context", "question"])
-    chain = load_qa_chain(model, chain_type="stuff", prompt=prompt)
-    return chain
+    return load_qa_chain(model, chain_type="stuff", prompt=prompt)
 
 def user_input(user_question, api_key):
-    embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001", google_api_key=api_key)
-    # new_db = FAISS.load_local("faiss_index", embeddings)
-    new_db = FAISS.load_local("faiss_index", embeddings)
-    response = new_db.as_retriever()
-    docs = new_db.similarity_search(user_question)
-    chain = get_conversational_chain()
-    response = chain({"input_documents": docs, "question": user_question}, return_only_outputs=True)
-    st.write("Reply: ", response["output_text"])
-
-#streamlit UI
+    """Process user input and generate a response."""
+    try:
+        embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001", google_api_key=api_key)
+        vector_store = FAISS.load_local("faiss_index", embeddings, allow_dangerous_deserialization=True)
+        docs = vector_store.similarity_search(user_question)
+        chain = get_conversational_chain()
+        response = chain({"input_documents": docs, "question": user_question}, return_only_outputs=True)
+        st.write("Reply: \n", response["output_text"])
+    except Exception as e:
+        st.error(f"Error processing your request: {e}")
 
 def main():
-    st.header("Document Genie💁")
+    """Main Streamlit app logic."""
+    st.header("Dr. Genie 💁")
 
-    user_question = st.text_input("Ask a Question from the PDF Files", key="user_question")
+    # User question input
+    user_question = st.text_input("Ask a Question from the PDF Files")
+    if user_question and api_key:
+        with st.spinner("Generating answer..."):
+            user_input(user_question, api_key)
 
-    if user_question and api_key:  # Ensure API key and user question are provided
-        user_input(user_question, api_key)
-
+    # Sidebar file upload and processing
     with st.sidebar:
-        st.title("Menu:")
-        pdf_docs = st.file_uploader("Upload your PDF Files and Click on the Submit & Process Button", accept_multiple_files=True, key="pdf_uploader")
-        if st.button("Submit & Process", key="process_button") and api_key:  # Check if API key is provided before processing
-            with st.spinner("Processing..."):
-                raw_text = get_pdf_text(pdf_docs)
-                text_chunks = get_text_chunks(raw_text)
-                get_vector_store(text_chunks, api_key)
-                st.success("Done")
+        pdf_docs = st.file_uploader("Upload your PDF Files", accept_multiple_files=True)
+        if st.button("Submit & Process"):
+            if not api_key:
+                st.error("Please enter your Google API Key.")
+            elif not pdf_docs:
+                st.error("Please upload at least one PDF file.")
+            else:
+                with st.spinner("Processing documents..."):
+                    raw_text = get_pdf_text(pdf_docs)
+                    if raw_text.strip():
+                        text_chunks = get_text_chunks(raw_text)
+                        get_vector_store(text_chunks, api_key)
+                        st.success("Processing complete! You can now ask questions.")
+                    else:
+                        st.error("No readable text found in the uploaded files.")
 
 if __name__ == "__main__":
     main()
