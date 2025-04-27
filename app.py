@@ -3,10 +3,14 @@ from PyPDF2 import PdfReader  # type: ignore
 from langchain.text_splitter import RecursiveCharacterTextSplitter  # type: ignore
 from langchain_google_genai import GoogleGenerativeAIEmbeddings  # type: ignore
 import google.generativeai as genai  # type: ignore
-from langchain.vectorstores import FAISS  # type: ignore
+# from langchain.vectorstores import FAISS  # type: ignore
+from langchain_community.vectorstores import FAISS
 from langchain_google_genai import ChatGoogleGenerativeAI  # type: ignore
 from langchain.chains.question_answering import load_qa_chain  # type: ignore
 from langchain.prompts import PromptTemplate  # type: ignore
+import docx  # python-docx for .docx files
+import chardet  # for encoding detection in .txt, .asc
+import PyPDF2
 
 # Streamlit page configuration
 st.set_page_config(page_title="Document Genie", layout="wide")
@@ -23,29 +27,66 @@ This chatbot uses Google's Generative AI (Gemini-PRO) to process and analyze upl
 """)
 
 # API key setup
-api_key = "AIzaSyBT7Gt1CvFuAU2wHAtbUOFuOeHtAeEuQqA"
+api_key = "AIzaSyDlY83MSLwjB-4xj1mgHlzjH-_Kqbj6Dxw"
 
-def get_pdf_text(pdf_docs):
-    """Extract text from uploaded PDF files."""
-    text = ""
-    for pdf in pdf_docs:
-        try:
-            pdf_reader = PdfReader(pdf)
+def extract_text_from_file(uploaded_file):
+    """Extract text from supported uploaded files."""
+    file_name = uploaded_file.name.lower()
+
+    try:
+        if file_name.endswith('.pdf'):
+            pdf_reader = PyPDF2.PdfReader(uploaded_file)
+            text = ""
             for page in pdf_reader.pages:
-                text += page.extract_text()
-        except Exception as e:
-            st.error(f"Error reading file {pdf.name}: {e}")
-    return text
+                page_text = page.extract_text()
+                if page_text:
+                    text += page_text
+            return text
+
+        elif file_name.endswith('.docx'):
+            doc = docx.Document(uploaded_file)
+            text = "\n".join([para.text for para in doc.paragraphs if para.text.strip() != ""])
+            return text
+
+        elif file_name.endswith(('.txt', '.asc', '.rtf')):
+            raw_data = uploaded_file.read()
+            result = chardet.detect(raw_data)
+            encoding = result['encoding'] if result['encoding'] else 'utf-8'
+            text = raw_data.decode(encoding)
+            return text
+
+        else:
+            st.warning(f"Unsupported file format: {file_name}")
+            return None
+
+    except Exception as e:
+        st.error(f"Error reading file {uploaded_file.name}: {e}")
+        return None
+
+def get_text_from_uploaded_files(uploaded_files):
+    """Extract and combine text from all uploaded files."""
+    combined_text = ""
+    for uploaded_file in uploaded_files:
+        text = extract_text_from_file(uploaded_file)
+        if text:
+            combined_text += text + "\n"
+    return combined_text
 
 def get_text_chunks(text):
     """Split text into manageable chunks."""
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=10000, chunk_overlap=1000)
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=2000,  # smaller chunks
+        chunk_overlap=200
+    )
     return text_splitter.split_text(text)
 
 def get_vector_store(text_chunks, api_key):
     """Create and save a FAISS vector store from text chunks."""
+    # Filter out empty and very large chunks
+    filtered_chunks = [chunk for chunk in text_chunks if chunk.strip() != "" and len(chunk) < 6000]
+
     embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001", google_api_key=api_key)
-    vector_store = FAISS.from_texts(text_chunks, embedding=embeddings)
+    vector_store = FAISS.from_texts(filtered_chunks, embedding=embeddings)
     vector_store.save_local("faiss_index")
 
 def get_conversational_chain():
@@ -59,7 +100,12 @@ def get_conversational_chain():
 
     Answer:
     """
-    model = ChatGoogleGenerativeAI(model="gemini-pro", temperature=0.3, google_api_key=api_key)
+    model = ChatGoogleGenerativeAI(
+        model="models/gemini-1.5-pro-latest",
+        temperature=0.3,
+        google_api_key=api_key,
+        api_version="v1"  # <-- Important addition
+    )
     prompt = PromptTemplate(template=prompt_template, input_variables=["context", "question"])
     return load_qa_chain(model, chain_type="stuff", prompt=prompt)
 
@@ -95,7 +141,7 @@ def main():
                 st.error("Please upload at least one PDF file.")
             else:
                 with st.spinner("Processing documents..."):
-                    raw_text = get_pdf_text(pdf_docs)
+                    raw_text = get_text_from_uploaded_files(pdf_docs)
                     if raw_text.strip():
                         text_chunks = get_text_chunks(raw_text)
                         get_vector_store(text_chunks, api_key)
